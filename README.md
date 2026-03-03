@@ -40,11 +40,7 @@ Acesse: http://localhost:8501
 
 ## 🔄 Evolução
 
-Este é a evolução de um projeto acadêmico de 10+ anos que agora funciona para QUALQUER empresa.
-
----
-
-**Desenvolvido com ❤️ para transformar dados em decisões**
+Este é a evolução de um projeto acadêmico que funciona para QUALQUER empresa.
 ```
 
 
@@ -88,10 +84,10 @@ venv/
 Depois de criar todos os arquivos, você deve ter:
 ```
 📂 Datainsight-v2
-├── 📄 app_v2.py (já está lá)
-├── 📄 requirements.txt ✅
-├── 📄 utils.py ✅
-├── 📄 POST_LINKEDIN.md ✅
-├── 📄 GUIA_IMPLEMENTACAO.md ✅
-├── 📄 README.md ✅
-└── 📄 .gitignore ✅
+├── 📄 app_v2.py
+├── 📄 requirements.txt 
+├── 📄 utils.py 
+├── 📄 POST_LINKEDIN.md 
+├── 📄 GUIA_IMPLEMENTACAO.md 
+├── 📄 README.md 
+└── 📄 .gitignore 
