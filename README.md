@@ -14,13 +14,6 @@ pip install -r requirements.txt
 streamlit run app_v2.py
 ```
 
-Acesse: http://localhost:8501
-
-## 📖 Documentação
-
-- [Guia de Implementação](GUIA_IMPLEMENTACAO.md)
-- [Posts LinkedIn](POST_LINKEDIN.md)
-
 ## ✨ Recursos
 
 - Processa qualquer CSV ou Excel
