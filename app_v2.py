@@ -121,7 +121,6 @@ st.sidebar.markdown("""
 # ============ MAIN CONTENT ============
 if uploaded_file is not None:
     try:
-        # Load data
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
@@ -397,6 +396,9 @@ if uploaded_file is not None:
                     use_container_width=True
                 )
                 st.success("✅ Relatório gerado com sucesso!")
+
+    except Exception as e:
+        st.error(f"Erro ao processar o arquivo: {e}")
 
 else:
     # Landing page
