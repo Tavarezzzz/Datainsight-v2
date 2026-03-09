@@ -4,190 +4,237 @@ import numpy as np
 import plotly.express as px
 import google.generativeai as genai
 from io import BytesIO
-from datetime import datetime
 import warnings
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
 warnings.filterwarnings('ignore')
-st.set_page_config(
-    page_title="Data Insight",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
-# --- ESTADO DE SESSÃO ---
+# --- GENERAL CONFIG ---
+st.set_page_config(page_title="Dashboard", layout="wide", initial_sidebar_state="expanded")
+
+# --- OPTIMIZED DATA LOADING (VECTORIZED) ---
+@st.cache_data(show_spinner="Optimizing memory...", max_entries=5)
+def load_and_optimize_data(file_bytes, file_name):
+    try:
+        buf = BytesIO(file_bytes)
+        if file_name.endswith('.csv'):
+            df = pd.read_csv(buf, low_memory=False)
+        elif file_name.endswith('.parquet'):
+            df = pd.read_parquet(buf)
+        else:
+            df = pd.read_excel(buf)
+        
+        # Numeric downcasting to save RAM
+        for col in df.select_dtypes(include=['int64', 'float64']).columns:
+            df[col] = pd.to_numeric(df[col], downcast='integer' if df[col].dtype == 'int64' else 'float')
+        
+        # Convert object columns with low cardinality to categories
+        for col in df.select_dtypes(include=['object']).columns:
+            if df[col].nunique() / max(len(df), 1) < 0.5:
+                df[col] = df[col].astype('category')
+        
+        return df
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+        return pd.DataFrame()
+
+# --- CSS STYLING ---
+st.markdown("""
+    <style>
+    input, textarea, [data-baseweb="input"], [data-baseweb="textarea"] {
+        border-radius: 6px !important;
+        border: 1px solid rgba(100, 150, 200, 0.5) !important;
+    }
+    button[kind="primary"] { border-radius: 6px !important; }
+    [data-testid="stMetric"] {
+        padding: 15px !important;
+        border-radius: 8px !important;
+        background-color: rgba(255, 255, 255, 0.05);
+    }
+    hr { margin: 1.5rem 0 !important; }
+    .user-badge {
+        font-size: 0.75rem;
+        font-weight: bold;
+        padding: 3px 10px;
+        border-radius: 4px;
+        background-color: rgba(93, 173, 226, 0.2);
+        color: #5dade2;
+        border: 1px solid rgba(93, 173, 226, 0.4);
+        text-transform: uppercase;
+        display: inline-block;
+        margin-bottom: 10px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- SESSION STATE ---
 if "logado" not in st.session_state:
     st.session_state.logado = False
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
 if "chat" not in st.session_state:
     st.session_state.chat = []
+if "user_name" not in st.session_state:
+    st.session_state.user_name = ""
 if "df_global" not in st.session_state:
     st.session_state.df_global = None
 
-# --- FORMATADORES ---
-fmt_moeda = lambda x: f"R$ {x:,.2f}"
-fmt_num = lambda x: f"{x:,}"
-
-# --- FUNÇÃO DE LOGIN ---
-def tela_login():
+# --- LOGIN SCREEN ---
+def login_screen():
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.markdown("<h1 style='text-align: center;'>Login Data Insight</h1>", unsafe_allow_html=True)
-        usuario = st.text_input("Usuário", placeholder="Digite seu usuário")
-        senha = st.text_input("Senha", type="password", placeholder="Digite sua senha")
-        
-        if st.button("Entrar", use_container_width=True):
-            if usuario == "admin" and senha == "1234":
-                st.session_state.logado = True
-                st.session_state.is_admin = True
+        st.title("Login")
+        user = st.text_input("Username")
+        pw = st.text_input("Password", type="password")
+        if st.button("Enter", use_container_width=True):
+            if user == "admin" and pw == "1234":
+                st.session_state.update({"logado": True, "is_admin": True, "user_name": "Admin"})
                 st.rerun()
-            elif usuario and senha:
-                st.session_state.logado = True
-                st.session_state.is_admin = False
+            elif user and pw:
+                st.session_state.update({"logado": True, "is_admin": False, "user_name": user.capitalize()})
                 st.rerun()
             else:
-                st.error("Credenciais inválidas.")
+                st.error("Invalid username or password.")
 
-# --- BLOQUEIO DE ACESSO ---
 if not st.session_state.logado:
-    tela_login()
+    login_screen()
     st.stop()
 
-# --- FUNÇÃO DE AUXÍLIO PARA IA ---
-def resumo_contexto(df_filtrado):
-    receita_total = df_filtrado["Receita Total (receita bruta)"].sum()
-    lucro_total = df_filtrado["Lucro Líquido"].sum()
-    return f"Contexto Atual: Receita Total R$ {receita_total:,.2f}, Lucro Líquido R$ {lucro_total:,.2f}."
+# --- SIDEBAR (DYNAMIC CASCADING FILTERS) ---
+with st.sidebar:
+    status_label = "ADMIN" if st.session_state.is_admin else "USER"
+    st.markdown(f"<span class='user-badge'>{status_label}</span>", unsafe_allow_html=True)
+    
+    st.header("Records Status")
+    metric_placeholder = st.empty()
+    st.divider()
 
-# ============ DASHBOARD PRINCIPAL ============
+    st.header("Data Source")
+    uploaded_file = st.file_uploader("Upload CSV, Excel or Parquet", type=["csv", "xlsx", "xls", "parquet"])
+    
+    if uploaded_file:
+        file_bytes = uploaded_file.read()
+        st.session_state.df_global = load_and_optimize_data(file_bytes, uploaded_file.name)
 
-# Header e Botão Sair
-col_t1, col_t2 = st.columns([8, 1])
-with col_t1:
-    status = "MODO ADMIN" if st.session_state.is_admin else "MODO USUÁRIO"
-    st.title(f"Dashboard Financeiro - {status}")
-with col_t2:
-    if st.button("Sair", use_container_width=True):
-        st.session_state.logado = False
-        st.session_state.df_global = None
+    df_filtered = None
+    if st.session_state.df_global is not None:
+        st.header("Smart Filters")
+        temp_df = st.session_state.df_global.copy()
+        cat_cols = temp_df.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        for col in cat_cols[:5]:
+            options = sorted(temp_df[col].unique().tolist())
+            if options:
+                selected = st.multiselect(f"Filter {col}", options, key=f"filt_{col}")
+                if selected:
+                    temp_df = temp_df[temp_df[col].isin(selected)]
+        
+        df_filtered = temp_df
+        metric_placeholder.metric("Filtered Records", f"{len(df_filtered):,}", f"Total: {len(st.session_state.df_global):,}")
+
+if st.session_state.df_global is None:
+    st.info("👈 Please upload a dataset in the sidebar to begin.")
+    st.stop()
+
+# --- HEADER ---
+col_h1, col_h2 = st.columns([8, 1])
+with col_h1:
+    st.markdown(f"<h3 style='margin-bottom:-15px;color:#5dade2;'>Hello, {st.session_state.user_name}!</h3>", unsafe_allow_html=True)
+    st.title("Dashboard")
+with col_h2:
+    if st.button("Logout", use_container_width=True):
+        st.session_state.update({"logado": False, "df_global": None, "chat": []})
         st.rerun()
 
-# Sidebar - Upload de Dados
-st.sidebar.header("Base de Dados")
-arquivo_carregado = st.sidebar.file_uploader("Suba seu CSV ou Excel", type=["csv", "xlsx"])
+st.divider()
 
-if arquivo_carregado:
-    try:
-        if arquivo_carregado.name.endswith('.csv'):
-            df_input = pd.read_csv(arquivo_carregado)
-        else:
-            df_input = pd.read_excel(arquivo_carregado)
-        st.session_state.df_global = df_input
-    except Exception as e:
-        st.sidebar.error(f"Erro ao ler arquivo: {e}")
+# --- IA ASSISTANT (GEMINI) ---
+def ai_context(df_f):
+    rows, cols = df_f.shape
+    return f"Dataset has {rows} rows and {cols} columns. Active columns: {', '.join(df_f.columns.tolist())}."
 
-# Verifica se existem dados carregados
-if st.session_state.df_global is None:
-    st.info("Bem-vindo! Por favor, carregue um arquivo na barra lateral para começar a análise.")
-    st.stop()
+with st.expander("🤖 AI Insights Assistant", expanded=False):
+    query = st.text_input("Ask anything about the current filtered data:")
+    if st.button("Analyze"):
+        try:
+            genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            prompt = f"{ai_context(df_filtered)}\nUser Question: {query}"
+            response = model.generate_content(prompt)
+            st.write(response.text)
+        except: st.error("AI connection error. Check your API Key.")
 
-df = st.session_state.df_global.copy()
+# --- DYNAMIC KPIS (WITH FORMATTING) ---
+st.subheader("Key Performance Indicators")
 
-# Sidebar - Filtros Dinâmicos
-st.sidebar.header("Filtros")
-lista_empresas = ["Todas"] + sorted(df["Empresa"].unique().tolist())
-empresa_selecionada = st.sidebar.selectbox("Selecionar Empresa", lista_empresas)
+# Filter numeric columns to avoid summing Years/IDs
+kpi_cols = [c for c in df_filtered.select_dtypes(include=[np.number]).columns if "year" not in c.lower() and "ano" not in c.lower()]
 
-df_filtrado = df.copy()
-if empresa_selecionada != "Todas":
-    df_filtrado = df_filtrado[df_filtrado["Empresa"] == empresa_selecionada]
+if kpi_cols:
+    cols_kpi = st.columns(min(len(kpi_cols), 4))
+    for i, col_name in enumerate(kpi_cols[:4]):
+        total_val = df_filtered[col_name].sum()
+        
+        # BR Formatting: 1.000.000,00
+        formatted_val = f"{total_val:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        
+        cols_kpi[i].metric(col_name, formatted_val)
+else:
+    st.warning("No suitable numeric columns found for KPIs.")
 
-# --- CHATBOT IA (ASSISTENTE) ---
-with st.expander("Perguntar ao Assistente IA", expanded=False):
-    pergunta = st.text_area("O que você deseja saber sobre esses dados?")
-    if st.button("Enviar Pergunta"):
-        if pergunta:
-            try:
-                # Substitua pela sua chave ou configure no Streamlit Secrets
-                api_key = st.secrets.get("GEMINI_API_KEY", "SUA_CHAVE_AQUI")
-                genai.configure(api_key=api_key)
-                model = genai.GenerativeModel("gemini-2.0-flash")
-                contexto = resumo_contexto(df_filtrado)
-                prompt = f"Dados: {contexto}. Pergunta: {pergunta}"
-                response = model.generate_content(prompt)
-                st.session_state.chat.insert(0, ("IA", response.text))
-                st.session_state.chat.insert(0, ("Você", pergunta))
-            except Exception as e:
-                st.error("Erro na API do Gemini. Verifique sua chave.")
-    
-    for autor, msg in st.session_state.chat:
-        st.write(f"**{autor}:** {msg}")
-
-# --- ABAS DE CONTEÚDO ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Visão Geral", "Gráficos", "Dados Brutos", "Exportar", "Previsão"])
+# --- GRAPHICAL ANALYSIS ---
+st.divider()
+tab1, tab2, tab3, tab4 = st.tabs(["Analysis Hub", "Data Distribution", "Raw Data", "Export"])
 
 with tab1:
-    st.subheader("Indicadores Principais (KPIs)")
-    c1, c2, c3 = st.columns(3)
-    rec_val = df_filtrado["Receita Total (receita bruta)"].sum()
-    luc_val = df_filtrado["Lucro Líquido"].sum()
-    opex_val = df_filtrado["Custo Operacional (OPEX)"].sum()
+    st.subheader("Dynamic Visualizer")
+    g_col1, g_col2 = st.columns([3, 1])
     
-    c1.metric("Receita Total", fmt_moeda(rec_val))
-    c2.metric("Lucro Líquido", fmt_moeda(luc_val))
-    c3.metric("Custos (OPEX)", fmt_moeda(opex_val))
+    with g_col2:
+        chart_type = st.radio("Chart Type:", ["Bar", "Pie", "Line", "Box Plot"])
+        agg_func = st.selectbox("Aggregation:", ["Sum", "Mean", "Count"])
+    
+    with g_col1:
+        # Use all numeric columns for charts (including Year)
+        all_num_cols = df_filtered.select_dtypes(include=[np.number]).columns.tolist()
+        cat_cols = df_filtered.select_dtypes(include=['object', 'category']).columns.tolist()
+        
+        if all_num_cols and cat_cols:
+            y_axis = st.selectbox("Numeric Value (Y):", all_num_cols, key="y_axis")
+            x_axis = st.selectbox("Category (X):", cat_cols, key="x_axis")
+            
+            agg_map = {"Sum": "sum", "Mean": "mean", "Count": "count"}
+            chart_data = df_filtered.groupby(x_axis, observed=True)[y_axis].agg(agg_map[agg_func]).reset_index().sort_values(y_axis, ascending=False).head(15)
+            
+            if chart_type == "Bar":
+                fig = px.bar(chart_data, x=x_axis, y=y_axis, color=y_axis, text_auto='.2s', color_continuous_scale=['#08306b', '#5dade2'])
+                fig.update_layout(coloraxis_showscale=False, plot_bgcolor="rgba(0,0,0,0)")
+            elif chart_type == "Pie":
+                fig = px.pie(chart_data, names=x_axis, values=y_axis, hole=0.4, color_discrete_sequence=px.colors.sequential.Blues_r)
+            elif chart_type == "Line":
+                fig = px.line(df_filtered.sort_values(x_axis), x=x_axis, y=y_axis, markers=True, color_discrete_sequence=['#5dade2'])
+            elif chart_type == "Box Plot":
+                fig = px.box(df_filtered, x=x_axis, y=y_axis, color=x_axis)
+                
+            st.plotly_chart(fig, use_container_width=True)
 
 with tab2:
-    st.subheader("Análise Temporal e Setorial")
-    col_g1, col_g2 = st.columns(2)
-    with col_g1:
-        fig_rec = px.bar(df_filtrado, x="Ano", y="Receita Total (receita bruta)", color="Empresa", title="Receita por Ano")
-        st.plotly_chart(fig_rec, use_container_width=True)
-    with col_g2:
-        fig_setor = px.pie(df_filtrado, names="Setor", values="Receita Total (receita bruta)", title="Distribuição por Setor")
-        st.plotly_chart(fig_setor, use_container_width=True)
+    st.subheader("Distribution Analysis")
+    if all_num_cols:
+        h_col = st.selectbox("Select column for Histogram:", all_num_cols)
+        fig_h = px.histogram(df_filtered, x=h_col, marginal="violin", color_discrete_sequence=['#5dade2'], nbins=30)
+        st.plotly_chart(fig_h, use_container_width=True)
 
 with tab3:
-    st.dataframe(df_filtrado, use_container_width=True)
+    st.subheader("Tabular View (Top 30)")
+    st.dataframe(df_filtered.head(30), use_container_width=True)
 
 with tab4:
-    st.subheader("Gerar Relatório")
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df_filtrado.to_excel(writer, index=False, sheet_name='Análise')
-    st.download_button(
-        label="Baixar Dados em Excel",
-        data=output.getvalue(),
-        file_name=f"relatorio_{datetime.now().strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
-with tab5:
-    st.subheader("Projeção Estatística para o Próximo Ano")
-    df_agrupado = df_filtrado.groupby("Ano")["Receita Total (receita bruta)"].sum().reset_index()
+    st.subheader("Export Center")
+    ex1, ex2 = st.columns(2)
+    csv = df_filtered.to_csv(index=False).encode('utf-8')
+    ex1.download_button("Download CSV", csv, "extract.csv", "text/csv", use_container_width=True)
     
-    if len(df_agrupado) > 1:
-        x = df_agrupado["Ano"].values
-        y = df_agrupado["Receita Total (receita bruta)"].values
-        
-        # Regressão Linear Simples
-        coef = np.polyfit(x, y, 1)
-        proximo_ano = int(x.max() + 1)
-        previsao = coef[0] * proximo_ano + coef[1]
-        
-        c_pred1, c_pred2 = st.columns(2)
-        c_pred1.metric(f"Projeção Receita {proximo_ano}", fmt_moeda(previsao))
-        c_pred2.write("A previsão é baseada na tendência histórica (Regressão Linear).")
-        
-        # Gráfico de Tendência
-        df_projecao = pd.concat([df_agrupado, pd.DataFrame({"Ano": [proximo_ano], "Receita Total (receita bruta)": [previsao]})])
-        fig_proj = px.line(df_projecao, x="Ano", y="Receita Total (receita bruta)", title="Linha de Tendência", markers=True)
-        fig_proj.add_scatter(x=[proximo_ano], y=[previsao], mode='markers', marker=dict(size=12, color='red'), name="Previsão")
-        st.plotly_chart(fig_proj, use_container_width=True)
-    else:
-        st.warning("! Dados históricos insuficientes (mínimo 2 anos) para calcular a tendência.")
-
-# --- FOOTER ---
-st.markdown("---")
-st.caption(f"Data Insight | {datetime.now().year} | Criado para Análise Multi-Empresa")
+    if ex2.button("Prepare Excel", use_container_width=True):
+        buf = BytesIO()
+        df_filtered.to_excel(buf, index=False)
+        st.download_button("Download Excel File", buf.getvalue(), "extract.xlsx", use_container_width=True)
