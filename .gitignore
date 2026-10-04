@@ -1,27 +1,28 @@
-# Ambientes
+# Ambientes virtuais
 venv/
 .venv/
 env/
+
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyc
+*.egg-info/
 
 # Secrets e credenciais
-secrets.toml
-.env
-.env.local
+.streamlit/secrets.toml
 
 # Configurações do editor
 .vscode/
-.streamlit/
+.idea/
+*.swp
 
 # Arquivos gerados
-*.pyc
-*.pyo
-*.egg-info/
 dist/
 build/
 
-# Dados locais (testes)
+# Dados locais / testes
 *.csv
 *.xlsx
 *.xls
@@ -31,7 +32,3 @@ entrada/
 # Sistema operacional
 .DS_Store
 Thumbs.db
-
-# IDE
-.idea/
-*.swp
